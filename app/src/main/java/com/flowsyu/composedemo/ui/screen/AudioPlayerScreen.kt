@@ -17,6 +17,8 @@ import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -38,6 +40,13 @@ fun AudioPlayerScreen(
     val context = LocalContext.current
     var audioService by remember { mutableStateOf<AudioPlaybackService?>(null) }
     var isPlaying by remember { mutableStateOf(false) }
+    
+    val focusRequester = remember { FocusRequester() }
+
+    LaunchedEffect(Unit) {
+        focusRequester.requestFocus()
+    }
+    
     var currentPosition by remember { mutableStateOf(0L) }
     var duration by remember { mutableStateOf(mediaFile.duration) }
     var currentMediaFile by remember { mutableStateOf(mediaFile) }
@@ -105,7 +114,10 @@ fun AudioPlayerScreen(
             TopAppBar(
                 title = { Text("音频播放") },
                 navigationIcon = {
-                    IconButton(onClick = onBack) {
+                    IconButton(
+                        onClick = onBack,
+                        modifier = Modifier.focusRequester(focusRequester)
+                    ) {
                         Icon(Icons.Default.ArrowBack, "返回")
                     }
                 }

@@ -14,7 +14,7 @@ data class MediaFile(
 ) : Serializable
 
 enum class MediaType {
-    AUDIO, VIDEO
+    AUDIO, VIDEO, IMAGE
 }
 
 enum class ViewType {

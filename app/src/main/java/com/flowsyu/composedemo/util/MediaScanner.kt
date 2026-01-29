@@ -24,6 +24,10 @@ class MediaScanner(private val context: Context) {
             // 扫描视频文件
             val videoFiles = scanVideoFiles(directoryPath)
             mediaFiles.addAll(videoFiles)
+            
+            // 扫描图片文件
+            val imageFiles = scanImageFiles(directoryPath)
+            mediaFiles.addAll(imageFiles)
         } catch (e: Exception) {
             e.printStackTrace()
         }
@@ -151,6 +155,64 @@ class MediaScanner(private val context: Context) {
         }
 
         return videoFiles
+    }
+
+    private fun scanImageFiles(directoryPath: String): List<MediaFile> {
+        val imageFiles = mutableListOf<MediaFile>()
+        val projection = arrayOf(
+            MediaStore.Images.Media._ID,
+            MediaStore.Images.Media.DISPLAY_NAME,
+            MediaStore.Images.Media.DATA,
+            MediaStore.Images.Media.SIZE
+        )
+
+        val selection = if (directoryPath.isNotEmpty()) {
+            "${MediaStore.Images.Media.DATA} LIKE ?"
+        } else null
+
+        val selectionArgs = if (directoryPath.isNotEmpty()) {
+            arrayOf("$directoryPath%")
+        } else null
+
+        val sortOrder = "${MediaStore.Images.Media.DISPLAY_NAME} ASC"
+
+        context.contentResolver.query(
+            MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
+            projection,
+            selection,
+            selectionArgs,
+            sortOrder
+        )?.use { cursor ->
+            val idColumn = cursor.getColumnIndexOrThrow(MediaStore.Images.Media._ID)
+            val nameColumn = cursor.getColumnIndexOrThrow(MediaStore.Images.Media.DISPLAY_NAME)
+            val dataColumn = cursor.getColumnIndexOrThrow(MediaStore.Images.Media.DATA)
+            val sizeColumn = cursor.getColumnIndexOrThrow(MediaStore.Images.Media.SIZE)
+
+            while (cursor.moveToNext()) {
+                val id = cursor.getLong(idColumn)
+                val name = cursor.getString(nameColumn)
+                val path = cursor.getString(dataColumn)
+                val size = cursor.getLong(sizeColumn)
+
+                val uri = Uri.withAppendedPath(
+                    MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
+                    id.toString()
+                )
+
+                imageFiles.add(
+                    MediaFile(
+                        uri = uri,
+                        name = name,
+                        path = path,
+                        size = size,
+                        duration = 0,
+                        type = MediaType.IMAGE
+                    )
+                )
+            }
+        }
+
+        return imageFiles
     }
 }
 

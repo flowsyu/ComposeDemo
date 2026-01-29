@@ -22,6 +22,9 @@ sealed class Screen {
     
     @Serializable
     data class AudioPlayer(val mediaFileJson: String) : Screen()
+    
+    @Serializable
+    data class ImageViewer(val mediaFileJson: String) : Screen()
 }
 
 fun MediaFile.toJson(): String {

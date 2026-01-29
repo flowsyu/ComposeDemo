@@ -5,14 +5,18 @@ import android.os.Build
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextOverflow
@@ -34,11 +38,21 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.ui.graphics.vector.rememberVectorPainter
 import androidx.compose.foundation.border
-import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsFocusedAsState
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.onKeyEvent
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.focusable
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.type
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalPermissionsApi::class)
 @Composable
@@ -49,8 +63,30 @@ fun MediaLibraryScreen(
 ) {
     val state by viewModel.state.collectAsState()
     
+    val focusRequester = remember { FocusRequester() }
+    val searchFieldFocusRequester = remember { FocusRequester() }
+    val listState = rememberLazyListState()
+    val gridState = rememberLazyGridState()
+    val itemFocusRequesters = remember { mutableStateMapOf<String, FocusRequester>() }
+    var lastSelectedUri by rememberSaveable { mutableStateOf<String?>(null) }
+
+    LaunchedEffect(Unit) {
+        focusRequester.requestFocus()
+    }
+    
     var isSearching by remember { mutableStateOf(false) }
     var searchQuery by remember { mutableStateOf("") }
+    
+    LaunchedEffect(isSearching) {
+        if (isSearching) {
+            searchFieldFocusRequester.requestFocus()
+        }
+    }
+    
+    BackHandler(enabled = isSearching) {
+        isSearching = false
+        searchQuery = ""
+    }
     
     val filteredMediaFiles = remember(state.mediaFiles, searchQuery) {
         if (searchQuery.isBlank()) {
@@ -66,6 +102,7 @@ fun MediaLibraryScreen(
 
     // Helper to handle click and update playlist
     val handleMediaClick: (MediaFile) -> Unit = { file ->
+        lastSelectedUri = file.uri.toString()
         val index = filteredMediaFiles.indexOfFirst { it.uri == file.uri }
         if (index != -1) {
             MediaManager.setPlaylist(filteredMediaFiles, index)
@@ -73,9 +110,24 @@ fun MediaLibraryScreen(
         onMediaFileClick(file)
     }
 
+    LaunchedEffect(lastSelectedUri, filteredMediaFiles, state.viewType) {
+        val key = lastSelectedUri ?: return@LaunchedEffect
+        val index = filteredMediaFiles.indexOfFirst { it.uri.toString() == key }
+        if (index >= 0) {
+            if (state.viewType == ViewType.LIST) {
+                listState.scrollToItem(index)
+            } else {
+                gridState.scrollToItem(index)
+            }
+            withFrameNanos { }
+            itemFocusRequesters[key]?.requestFocus()
+        }
+    }
+
     val permissions = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
         listOf(
             Manifest.permission.READ_MEDIA_AUDIO,
+            Manifest.permission.READ_MEDIA_IMAGES,
             Manifest.permission.READ_MEDIA_VIDEO,
             Manifest.permission.POST_NOTIFICATIONS
         )
@@ -100,7 +152,9 @@ fun MediaLibraryScreen(
                             value = searchQuery,
                             onValueChange = { searchQuery = it },
                             placeholder = { Text("搜索...") },
-                            modifier = Modifier.fillMaxWidth(),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .focusRequester(searchFieldFocusRequester),
                             singleLine = true,
                             colors = TextFieldDefaults.colors(
                                 focusedContainerColor = Color.Transparent,
@@ -133,7 +187,10 @@ fun MediaLibraryScreen(
                 },
                 actions = {
                     if (!isSearching) {
-                        IconButton(onClick = { isSearching = true }) {
+                        IconButton(
+                            onClick = { isSearching = true },
+                            modifier = Modifier.focusRequester(focusRequester)
+                        ) {
                             Icon(Icons.Default.Search, "搜索")
                         }
                         IconButton(onClick = { viewModel.toggleViewType() }) {
@@ -191,11 +248,19 @@ fun MediaLibraryScreen(
                     if (state.viewType == ViewType.LIST) {
                         MediaListView(
                             mediaFiles = filteredMediaFiles,
+                            listState = listState,
+                            focusRequesterForItem = { file ->
+                                itemFocusRequesters.getOrPut(file.uri.toString()) { FocusRequester() }
+                            },
                             onMediaFileClick = handleMediaClick
                         )
                     } else {
                         MediaGridView(
                             mediaFiles = filteredMediaFiles,
+                            gridState = gridState,
+                            focusRequesterForItem = { file ->
+                                itemFocusRequesters.getOrPut(file.uri.toString()) { FocusRequester() }
+                            },
                             onMediaFileClick = handleMediaClick
                         )
                     }
@@ -304,15 +369,19 @@ fun EmptyContent() {
 @Composable
 fun MediaListView(
     mediaFiles: List<MediaFile>,
+    listState: androidx.compose.foundation.lazy.LazyListState,
+    focusRequesterForItem: (MediaFile) -> FocusRequester,
     onMediaFileClick: (MediaFile) -> Unit
 ) {
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
+        state = listState,
         contentPadding = PaddingValues(8.dp)
     ) {
         items(mediaFiles, key = { it.uri.toString() }) { mediaFile ->
             MediaListItem(
                 mediaFile = mediaFile,
+                focusRequester = focusRequesterForItem(mediaFile),
                 onClick = { onMediaFileClick(mediaFile) }
             )
         }
@@ -322,16 +391,29 @@ fun MediaListView(
 @Composable
 fun MediaListItem(
     mediaFile: MediaFile,
+    focusRequester: FocusRequester,
     onClick: () -> Unit
 ) {
-    var isFocused by remember { mutableStateOf(false) }
-    val scale by animateFloatAsState(if (isFocused) 1.05f else 1f)
-    
+    val interactionSource = remember { MutableInteractionSource() }
+    val isFocused by interactionSource.collectIsFocusedAsState()
+    val scale by animateFloatAsState(if (isFocused) 1.02f else 1f)
+
     Card(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = 8.dp, vertical = 4.dp)
-            .onFocusChanged { isFocused = it.isFocused }
+            .padding(horizontal = 20.dp, vertical = 4.dp)
+            .focusRequester(focusRequester)
+            .focusable(interactionSource = interactionSource)
+            .onKeyEvent { event ->
+                if (event.type == KeyEventType.KeyUp &&
+                    (event.key == Key.DirectionCenter || event.key == Key.Enter || event.key == Key.NumPadEnter)
+                ) {
+                    onClick()
+                    true
+                } else {
+                    false
+                }
+            }
             .graphicsLayer {
                 scaleX = scale
                 scaleY = scale
@@ -341,7 +423,11 @@ fun MediaListItem(
                 color = if (isFocused) MaterialTheme.colorScheme.primary else Color.Transparent,
                 shape = RoundedCornerShape(12.dp) // Match Card shape + padding
             )
-            .clickable(onClick = onClick)
+            .clickable(
+                interactionSource = interactionSource,
+                indication = null,
+                onClick = onClick
+            )
     ) {
         Row(
             modifier = Modifier
@@ -349,24 +435,39 @@ fun MediaListItem(
                 .padding(16.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            if (mediaFile.type == MediaType.VIDEO) {
-                AsyncImage(
-                    model = mediaFile.uri,
-                    contentDescription = null,
-                    modifier = Modifier
-                        .size(40.dp)
-                        .clip(RoundedCornerShape(4.dp)),
-                    contentScale = ContentScale.Crop,
-                    error = rememberVectorPainter(Icons.Default.VideoLibrary),
-                    placeholder = rememberVectorPainter(Icons.Default.VideoLibrary)
-                )
-            } else {
-                Icon(
-                    Icons.Default.MusicNote,
-                    contentDescription = null,
-                    modifier = Modifier.size(40.dp),
-                    tint = MaterialTheme.colorScheme.primary
-                )
+            when (mediaFile.type) {
+                MediaType.VIDEO -> {
+                    AsyncImage(
+                        model = mediaFile.uri,
+                        contentDescription = null,
+                        modifier = Modifier
+                            .size(40.dp)
+                            .clip(RoundedCornerShape(4.dp)),
+                        contentScale = ContentScale.Crop,
+                        error = rememberVectorPainter(Icons.Default.VideoLibrary),
+                        placeholder = rememberVectorPainter(Icons.Default.VideoLibrary)
+                    )
+                }
+                MediaType.IMAGE -> {
+                    AsyncImage(
+                        model = mediaFile.uri,
+                        contentDescription = null,
+                        modifier = Modifier
+                            .size(40.dp)
+                            .clip(RoundedCornerShape(4.dp)),
+                        contentScale = ContentScale.Crop,
+                        error = rememberVectorPainter(Icons.Default.Image),
+                        placeholder = rememberVectorPainter(Icons.Default.Image)
+                    )
+                }
+                MediaType.AUDIO -> {
+                    Icon(
+                        Icons.Default.MusicNote,
+                        contentDescription = null,
+                        modifier = Modifier.size(40.dp),
+                        tint = MaterialTheme.colorScheme.primary
+                    )
+                }
             }
             Spacer(modifier = Modifier.width(16.dp))
             Column(modifier = Modifier.weight(1f)) {
@@ -378,16 +479,18 @@ fun MediaListItem(
                 )
                 Spacer(modifier = Modifier.height(4.dp))
                 Row {
-                    Text(
-                        text = formatDuration(mediaFile.duration),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                    Text(
-                        text = " • ",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
+                    if (mediaFile.type != MediaType.IMAGE) {
+                        Text(
+                            text = formatDuration(mediaFile.duration),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Text(
+                            text = " • ",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
                     Text(
                         text = formatFileSize(mediaFile.size),
                         style = MaterialTheme.typography.bodySmall,
@@ -417,16 +520,20 @@ fun MediaListItem(
 @Composable
 fun MediaGridView(
     mediaFiles: List<MediaFile>,
+    gridState: androidx.compose.foundation.lazy.grid.LazyGridState,
+    focusRequesterForItem: (MediaFile) -> FocusRequester,
     onMediaFileClick: (MediaFile) -> Unit
 ) {
     LazyVerticalGrid(
-        columns = GridCells.Fixed(2),
+        columns = GridCells.Adaptive(minSize = 150.dp),
         modifier = Modifier.fillMaxSize(),
+        state = gridState,
         contentPadding = PaddingValues(8.dp)
     ) {
         items(mediaFiles, key = { it.uri.toString() }) { mediaFile ->
             MediaGridItem(
                 mediaFile = mediaFile,
+                focusRequester = focusRequesterForItem(mediaFile),
                 onClick = { onMediaFileClick(mediaFile) }
             )
         }
@@ -436,16 +543,29 @@ fun MediaGridView(
 @Composable
 fun MediaGridItem(
     mediaFile: MediaFile,
+    focusRequester: FocusRequester,
     onClick: () -> Unit
 ) {
-    var isFocused by remember { mutableStateOf(false) }
-    val scale by animateFloatAsState(if (isFocused) 1.1f else 1f)
+    val interactionSource = remember { MutableInteractionSource() }
+    val isFocused by interactionSource.collectIsFocusedAsState()
+    val scale by animateFloatAsState(if (isFocused) 1.02f else 1f)
 
     Card(
         modifier = Modifier
             .padding(4.dp)
             .aspectRatio(1f)
-            .onFocusChanged { isFocused = it.isFocused }
+            .focusRequester(focusRequester)
+            .focusable(interactionSource = interactionSource)
+            .onKeyEvent { event ->
+                if (event.type == KeyEventType.KeyUp &&
+                    (event.key == Key.DirectionCenter || event.key == Key.Enter || event.key == Key.NumPadEnter)
+                ) {
+                    onClick()
+                    true
+                } else {
+                    false
+                }
+            }
             .graphicsLayer {
                 scaleX = scale
                 scaleY = scale
@@ -455,7 +575,11 @@ fun MediaGridItem(
                 color = if (isFocused) MaterialTheme.colorScheme.primary else Color.Transparent,
                 shape = RoundedCornerShape(12.dp)
             )
-            .clickable(onClick = onClick)
+            .clickable(
+                interactionSource = interactionSource,
+                indication = null,
+                onClick = onClick
+            )
     ) {
         Column(
             modifier = Modifier
@@ -464,24 +588,39 @@ fun MediaGridItem(
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.Center
         ) {
-            if (mediaFile.type == MediaType.VIDEO) {
-                AsyncImage(
-                    model = mediaFile.uri,
-                    contentDescription = null,
-                    modifier = Modifier
-                        .size(48.dp) // Match icon size or make bigger? Keeps consistent layout for now.
-                        .clip(RoundedCornerShape(8.dp)),
-                    contentScale = ContentScale.Crop,
-                    error = rememberVectorPainter(Icons.Default.VideoLibrary),
-                    placeholder = rememberVectorPainter(Icons.Default.VideoLibrary)
-                )
-            } else {
-                Icon(
-                    Icons.Default.MusicNote,
-                    contentDescription = null,
-                    modifier = Modifier.size(48.dp),
-                    tint = MaterialTheme.colorScheme.primary
-                )
+            when (mediaFile.type) {
+                MediaType.VIDEO -> {
+                    AsyncImage(
+                        model = mediaFile.uri,
+                        contentDescription = null,
+                        modifier = Modifier
+                            .size(48.dp)
+                            .clip(RoundedCornerShape(8.dp)),
+                        contentScale = ContentScale.Crop,
+                        error = rememberVectorPainter(Icons.Default.VideoLibrary),
+                        placeholder = rememberVectorPainter(Icons.Default.VideoLibrary)
+                    )
+                }
+                MediaType.IMAGE -> {
+                    AsyncImage(
+                        model = mediaFile.uri,
+                        contentDescription = null,
+                        modifier = Modifier
+                            .size(48.dp)
+                            .clip(RoundedCornerShape(8.dp)),
+                        contentScale = ContentScale.Crop,
+                        error = rememberVectorPainter(Icons.Default.Image),
+                        placeholder = rememberVectorPainter(Icons.Default.Image)
+                    )
+                }
+                MediaType.AUDIO -> {
+                    Icon(
+                        Icons.Default.MusicNote,
+                        contentDescription = null,
+                        modifier = Modifier.size(48.dp),
+                        tint = MaterialTheme.colorScheme.primary
+                    )
+                }
             }
             Spacer(modifier = Modifier.height(12.dp))
             Text(
