@@ -20,10 +20,20 @@ import androidx.compose.ui.unit.dp
 import coil.compose.AsyncImage
 import coil.request.ImageRequest
 import com.flowsyu.composedemo.model.MediaFile
+import com.flowsyu.composedemo.model.MediaType
+import com.flowsyu.composedemo.ui.preview.DevicePreviews
+
+@Composable
+fun ImageViewerScreen(
+    mediaFile: MediaFile,
+    onBack: () -> Unit
+) {
+    ImageViewerScreenContent(mediaFile, onBack)
+}
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun ImageViewerScreen(
+fun ImageViewerScreenContent(
     mediaFile: MediaFile,
     onBack: () -> Unit
 ) {
@@ -113,5 +123,24 @@ fun ImageViewerScreen(
                 )
             }
         }
+    }
+}
+
+@DevicePreviews
+@Composable
+fun ImageViewerScreenPreview() {
+    val sampleFile = MediaFile(
+        uri = android.net.Uri.EMPTY,
+        name = "Sample Image.jpg",
+        path = "",
+        size = 1024L,
+        duration = 0L,
+        type = MediaType.IMAGE
+    )
+    MaterialTheme {
+        ImageViewerScreenContent(
+            mediaFile = sampleFile,
+            onBack = {}
+        )
     }
 }

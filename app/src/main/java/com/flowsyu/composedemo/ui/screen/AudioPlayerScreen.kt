@@ -1,12 +1,18 @@
 package com.flowsyu.composedemo.ui.screen
 
+import android.app.Activity
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.content.ServiceConnection
+import android.content.res.Configuration
 import android.os.IBinder
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.focusable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
@@ -19,43 +25,43 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
 import com.flowsyu.composedemo.model.MediaFile
 import com.flowsyu.composedemo.model.MediaManager
+import com.flowsyu.composedemo.model.MediaType
 import com.flowsyu.composedemo.service.AudioPlaybackService
 import com.flowsyu.composedemo.service.PlaybackMode
+import com.flowsyu.composedemo.ui.preview.DevicePreviews
 import com.flowsyu.composedemo.util.formatDuration
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun AudioPlayerScreen(
     mediaFile: MediaFile,
     onBack: () -> Unit
 ) {
     val context = LocalContext.current
+    val activity = context as? Activity
+    val configuration = LocalConfiguration.current
+    val isTv = (configuration.uiMode and Configuration.UI_MODE_TYPE_MASK) == Configuration.UI_MODE_TYPE_TELEVISION
+    val isLandscape = configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
+    
     var audioService by remember { mutableStateOf<AudioPlaybackService?>(null) }
     var isPlaying by remember { mutableStateOf(false) }
-    
-    val focusRequester = remember { FocusRequester() }
-
-    LaunchedEffect(Unit) {
-        focusRequester.requestFocus()
-    }
-    
     var currentPosition by remember { mutableStateOf(0L) }
     var duration by remember { mutableStateOf(mediaFile.duration) }
     var currentMediaFile by remember { mutableStateOf(mediaFile) }
     var isBound by remember { mutableStateOf(false) }
     var playbackMode by remember { mutableStateOf(PlaybackMode.LoopAll) }
-    
-    // Playlist Modal
-    var showPlaylist by rememberSaveable { mutableStateOf(false) }
-    val sheetState = rememberModalBottomSheetState()
 
     val serviceConnection = remember {
         object : ServiceConnection {
@@ -71,10 +77,6 @@ fun AudioPlayerScreen(
                         playbackMode = state.playbackMode
                         state.mediaFile?.let { file -> currentMediaFile = file }
                     }
-                    // Only play if it's a new request or not playing? 
-                    // For now keeping original logic to play passed file.
-                    // But if service is already playing this file, it might restart.
-                    // Ideally we check if it's already playing.
                     it.playAudio(mediaFile)
                 }
                 isBound = true
@@ -87,18 +89,41 @@ fun AudioPlayerScreen(
         }
     }
 
-    // 绑定服务
+    DisposableEffect(isLandscape) {
+        val window = activity?.window
+        if (window != null && isLandscape) {
+            val insetsController = WindowCompat.getInsetsController(window, window.decorView)
+            insetsController.systemBarsBehavior =
+                WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+            insetsController.hide(WindowInsetsCompat.Type.systemBars())
+        }
+
+        onDispose {
+            if (window != null && isLandscape) {
+                val insetsController = WindowCompat.getInsetsController(window, window.decorView)
+                insetsController.show(WindowInsetsCompat.Type.systemBars())
+            }
+        }
+    }
+
+    // Bind Service
     DisposableEffect(Unit) {
         val intent = Intent(context, AudioPlaybackService::class.java)
-        context.startService(intent)
+        if (!isTv) {
+            context.startService(intent)
+        }
         context.bindService(intent, serviceConnection, Context.BIND_AUTO_CREATE)
 
         onDispose {
+            if (isTv) {
+                audioService?.stopPlayback()
+                context.stopService(intent)
+            }
             context.unbindService(serviceConnection)
         }
     }
 
-    // 更新播放进度
+    // Update progress
     LaunchedEffect(isPlaying) {
         while (isActive && isPlaying) {
             audioService?.let {
@@ -107,6 +132,80 @@ fun AudioPlayerScreen(
             }
             delay(100)
         }
+    }
+
+    AudioPlayerScreenContent(
+        mediaFile = currentMediaFile,
+        isPlaying = isPlaying,
+        currentPosition = currentPosition,
+        duration = duration,
+        playbackMode = playbackMode,
+        playlist = MediaManager.mediaList,
+        onBack = onBack,
+        onPlayPause = {
+            if (isPlaying) {
+                audioService?.pausePlayback()
+            } else {
+                audioService?.resumePlayback()
+            }
+        },
+        onSeek = { pos ->
+            audioService?.seekTo(pos.toInt())
+            currentPosition = pos
+        },
+        onSkipPrevious = {
+            audioService?.let {
+                val newPos = (currentPosition - 10000).coerceAtLeast(0)
+                it.seekTo(newPos.toInt())
+                currentPosition = newPos
+            }
+        },
+        onSkipNext = {
+            audioService?.let {
+                val newPos = (currentPosition + 10000).coerceAtMost(duration)
+                it.seekTo(newPos.toInt())
+                currentPosition = newPos
+            }
+        },
+        onTogglePlayMode = {
+            audioService?.togglePlayMode()
+        },
+        onFileSelected = { file ->
+            audioService?.playAudio(file)
+        }
+    )
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun AudioPlayerScreenContent(
+    mediaFile: MediaFile,
+    isPlaying: Boolean,
+    currentPosition: Long,
+    duration: Long,
+    playbackMode: PlaybackMode,
+    playlist: List<MediaFile>,
+    onBack: () -> Unit,
+    onPlayPause: () -> Unit,
+    onSeek: (Long) -> Unit,
+    onSkipPrevious: () -> Unit,
+    onSkipNext: () -> Unit,
+    onTogglePlayMode: () -> Unit,
+    onFileSelected: (MediaFile) -> Unit
+) {
+    val configuration = LocalConfiguration.current
+    val isLandscape = configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
+    val focusRequester = remember { FocusRequester() }
+    
+    var showPlaylist by rememberSaveable { mutableStateOf(false) }
+    val sheetState = rememberModalBottomSheetState()
+    
+    // Smooth dragging state
+    var sliderPosition by remember(currentPosition) { mutableStateOf(currentPosition.toFloat()) }
+    var isDragging by remember { mutableStateOf(false) }
+
+    LaunchedEffect(Unit) {
+        focusRequester.requestFocus()
     }
 
     Scaffold(
@@ -124,218 +223,232 @@ fun AudioPlayerScreen(
             )
         }
     ) { paddingValues ->
-        Column(
+        Box(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(paddingValues)
-                .padding(24.dp),
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.SpaceEvenly
+                .padding(vertical = 24.dp, horizontal = 32.dp)
         ) {
-            // 专辑封面区域
-            Card(
-                modifier = Modifier
-                    .size(280.dp),
-                elevation = CardDefaults.cardElevation(defaultElevation = 8.dp)
-            ) {
-                Box(
-                    modifier = Modifier.fillMaxSize(),
-                    contentAlignment = Alignment.Center
+            val coverSize = if (isLandscape) 220.dp else 280.dp
+            val iconSize = if (isLandscape) 96.dp else 120.dp
+
+            val coverContent: @Composable () -> Unit = {
+                Card(
+                    modifier = Modifier.size(coverSize),
+                    elevation = CardDefaults.cardElevation(defaultElevation = 8.dp)
                 ) {
-                    Icon(
-                        Icons.Default.MusicNote,
-                        contentDescription = null,
-                        modifier = Modifier.size(120.dp),
-                        tint = MaterialTheme.colorScheme.primary
+                    Box(
+                        modifier = Modifier.fillMaxSize(),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            Icons.Default.MusicNote,
+                            contentDescription = null,
+                            modifier = Modifier.size(iconSize),
+                            tint = MaterialTheme.colorScheme.primary
+                        )
+                    }
+                }
+            }
+
+            val infoContent: @Composable () -> Unit = {
+                Column(
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    Text(
+                        text = mediaFile.name,
+                        style = MaterialTheme.typography.headlineSmall,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                        textAlign = TextAlign.Center
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(
+                        text = "Unknown Artist",
+                        style = MaterialTheme.typography.bodyLarge,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
             }
 
-            // 歌曲信息
-            Column(
-                horizontalAlignment = Alignment.CenterHorizontally,
-                modifier = Modifier.padding(vertical = 16.dp)
-            ) {
-                Text(
-                    text = currentMediaFile.name,
-                    style = MaterialTheme.typography.headlineSmall,
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis,
-                    textAlign = TextAlign.Center
-                )
-                Spacer(modifier = Modifier.height(8.dp))
-                Text(
-                    text = "Unknown Artist",
-                    style = MaterialTheme.typography.bodyLarge,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
+            val progressContent: @Composable () -> Unit = {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp)
+                ) {
+                    Slider(
+                        value = if (isDragging) sliderPosition else currentPosition.toFloat(),
+                        onValueChange = { value ->
+                            isDragging = true
+                            sliderPosition = value
+                        },
+                        onValueChangeFinished = {
+                            onSeek(sliderPosition.toLong())
+                            isDragging = false
+                        },
+                        valueRange = 0f..if(duration > 0) duration.toFloat() else 1f,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Text(
+                            text = formatDuration(if (isDragging) sliderPosition.toLong() else currentPosition),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Text(
+                            text = formatDuration(duration),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
             }
 
-            // 进度条
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 16.dp)
-            ) {
-                Slider(
-                    value = currentPosition.toFloat(),
-                    onValueChange = { value ->
-                        currentPosition = value.toLong()
-                    },
-                    onValueChangeFinished = {
-                        audioService?.seekTo(currentPosition.toInt())
-                    },
-                    valueRange = 0f..duration.toFloat(),
-                    modifier = Modifier.fillMaxWidth()
-                )
+            val controlsContent: @Composable () -> Unit = {
                 Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 32.dp),
+                    horizontalArrangement = Arrangement.SpaceEvenly,
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Text(
-                        text = formatDuration(currentPosition),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                    Text(
-                        text = formatDuration(duration),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
+                    IconButton(
+                        onClick = onSkipPrevious,
+                        modifier = Modifier.size(56.dp)
+                    ) {
+                        Icon(
+                            Icons.Default.Replay10,
+                            contentDescription = "快退10秒",
+                            modifier = Modifier.size(32.dp)
+                        )
+                    }
+
+                    FilledIconButton(
+                        onClick = onPlayPause,
+                        modifier = Modifier.size(72.dp)
+                    ) {
+                        Icon(
+                            if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
+                            contentDescription = if (isPlaying) "暂停" else "播放",
+                            modifier = Modifier.size(40.dp)
+                        )
+                    }
+
+                    IconButton(
+                        onClick = onSkipNext,
+                        modifier = Modifier.size(56.dp)
+                    ) {
+                        Icon(
+                            Icons.Default.Forward10,
+                            contentDescription = "快进10秒",
+                            modifier = Modifier.size(32.dp)
+                        )
+                    }
                 }
             }
 
-            // 播放控制按钮
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 32.dp),
-                horizontalArrangement = Arrangement.SpaceEvenly,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                // 快退
-                IconButton(
-                    onClick = {
-                        audioService?.let {
-                            val newPos = (currentPosition - 10000).coerceAtLeast(0)
-                            it.seekTo(newPos.toInt())
-                            currentPosition = newPos
-                        }
-                    },
-                    modifier = Modifier.size(56.dp)
+            val extraContent: @Composable () -> Unit = {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 32.dp),
+                    horizontalArrangement = Arrangement.SpaceAround
                 ) {
-                    Icon(
-                        Icons.Default.Replay10,
-                        contentDescription = "快退10秒",
-                        modifier = Modifier.size(32.dp)
-                    )
-                }
+                    var showToast by remember { mutableStateOf<String?>(null) }
 
-                // 播放/暂停
-                FilledIconButton(
-                    onClick = {
-                        if (isPlaying) {
-                            audioService?.pausePlayback()
-                        } else {
-                            audioService?.resumePlayback()
+                    LaunchedEffect(showToast) {
+                        showToast?.let {
+                            delay(2000)
+                            showToast = null
                         }
-                    },
-                    modifier = Modifier.size(72.dp)
-                ) {
-                    Icon(
-                        if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
-                        contentDescription = if (isPlaying) "暂停" else "播放",
-                        modifier = Modifier.size(40.dp)
-                    )
-                }
+                    }
 
-                // 快进
-                IconButton(
-                    onClick = {
-                        audioService?.let {
-                            val newPos = (currentPosition + 10000).coerceAtMost(duration)
-                            it.seekTo(newPos.toInt())
-                            currentPosition = newPos
+                    if (showToast != null) {
+                        AlertDialog(
+                            onDismissRequest = { showToast = null },
+                            confirmButton = {},
+                            text = { Text(showToast!!) }
+                        )
+                    }
+
+                    Column(
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        modifier = Modifier.clickable {
+                            showPlaylist = true
                         }
-                    },
-                    modifier = Modifier.size(56.dp)
-                ) {
-                    Icon(
-                        Icons.Default.Forward10,
-                        contentDescription = "快进10秒",
-                        modifier = Modifier.size(32.dp)
-                    )
+                    ) {
+                        Icon(
+                            Icons.Default.QueueMusic,
+                            contentDescription = "播放列表",
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(
+                            text = "列表",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+
+                    Column(
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        modifier = Modifier.clickable {
+                            onTogglePlayMode()
+                        }
+                    ) {
+                        val (icon, text) = when (playbackMode) {
+                            PlaybackMode.LoopAll -> Icons.Default.Repeat to "列表循环"
+                            PlaybackMode.LoopOne -> Icons.Default.RepeatOne to "单曲循环"
+                            PlaybackMode.Shuffle -> Icons.Default.Shuffle to "随机播放"
+                        }
+
+                        Icon(
+                            icon,
+                            contentDescription = text,
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(
+                            text = text,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
                 }
             }
 
-            // 附加信息
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 32.dp),
-                horizontalArrangement = Arrangement.SpaceAround
-            ) {
-                var showToast by remember { mutableStateOf<String?>(null) }
-                
-                LaunchedEffect(showToast) {
-                    showToast?.let {
-                        delay(2000)
-                        showToast = null
-                    }
-                }
-                
-                if (showToast != null) {
-                    AlertDialog(
-                        onDismissRequest = { showToast = null },
-                        confirmButton = {},
-                        text = { Text(showToast!!) }
-                    )
-                }
-
-                // 列表按钮
-                Column(
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    modifier = Modifier.clickable { 
-                         showPlaylist = true
-                    }
+            if (isLandscape) {
+                Row(
+                    modifier = Modifier.fillMaxSize(),
+                    horizontalArrangement = Arrangement.spacedBy(32.dp),
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Icon(
-                        Icons.Default.QueueMusic,
-                        contentDescription = "播放列表",
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                    Spacer(modifier = Modifier.height(4.dp))
-                    Text(
-                        text = "列表",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
+                    coverContent()
+                    Column(
+                        modifier = Modifier.weight(1f),
+                        horizontalAlignment = Alignment.CenterHorizontally
+                    ) {
+                        infoContent()
+                        progressContent()
+                        controlsContent()
+                        extraContent()
+                    }
                 }
-
-                // 播放模式切换按钮 (根据需求合并)
+            } else {
                 Column(
+                    modifier = Modifier.fillMaxSize(),
                     horizontalAlignment = Alignment.CenterHorizontally,
-                    modifier = Modifier.clickable { 
-                        audioService?.togglePlayMode()
-                    }
+                    verticalArrangement = Arrangement.SpaceEvenly
                 ) {
-                    val (icon, text) = when (playbackMode) {
-                        PlaybackMode.LoopAll -> Icons.Default.Repeat to "列表循环"
-                        PlaybackMode.LoopOne -> Icons.Default.RepeatOne to "单曲循环"
-                        PlaybackMode.Shuffle -> Icons.Default.Shuffle to "随机播放"
-                    }
-                    
-                    Icon(
-                        icon,
-                        contentDescription = text,
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                    Spacer(modifier = Modifier.height(4.dp))
-                    Text(
-                        text = text,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
+                    coverContent()
+                    infoContent()
+                    progressContent()
+                    controlsContent()
+                    extraContent()
                 }
             }
         }
@@ -352,13 +465,13 @@ fun AudioPlayerScreen(
                     .fillMaxHeight(0.5f)
             ) {
                 Text(
-                    text = "播放列表 (${MediaManager.mediaList.size})",
+                    text = "播放列表 (${playlist.size})",
                     style = MaterialTheme.typography.titleMedium,
                     modifier = Modifier.padding(16.dp)
                 )
                 LazyColumn {
-                    itemsIndexed(MediaManager.mediaList) { index, file ->
-                        val isCurrent = file.uri == currentMediaFile.uri
+                    itemsIndexed(playlist) { index, file ->
+                        val isCurrent = file.uri == mediaFile.uri
                         ListItem(
                             headlineContent = { 
                                 Text(
@@ -386,12 +499,44 @@ fun AudioPlayerScreen(
                                 }
                             },
                             modifier = Modifier.clickable {
-                                audioService?.playAudio(file)
+                                onFileSelected(file)
                             }
                         )
                     }
                 }
             }
         }
+    }
+}
+
+@DevicePreviews
+@Composable
+fun AudioPlayerScreenPreview() {
+    val sampleFile = MediaFile(
+        uri = android.net.Uri.EMPTY,
+        name = "Sample Audio.mp3",
+        path = "",
+        size = 1000L,
+        duration = 180000L,
+        type = MediaType.AUDIO
+    )
+    val playlist = listOf(sampleFile, sampleFile.copy(name = "Another Song.mp3"))
+
+    MaterialTheme {
+        AudioPlayerScreenContent(
+            mediaFile = sampleFile,
+            isPlaying = true,
+            currentPosition = 45000L,
+            duration = 180000L,
+            playbackMode = PlaybackMode.LoopAll,
+            playlist = playlist,
+            onBack = {},
+            onPlayPause = {},
+            onSeek = {},
+            onSkipPrevious = {},
+            onSkipNext = {},
+            onTogglePlayMode = {},
+            onFileSelected = {}
+        )
     }
 }

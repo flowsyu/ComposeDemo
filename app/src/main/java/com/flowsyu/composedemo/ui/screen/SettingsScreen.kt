@@ -38,9 +38,9 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.flowsyu.composedemo.ui.preview.DevicePreviews
 import com.flowsyu.composedemo.viewmodel.SettingsViewModel
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SettingsScreen(
     onBack: () -> Unit,
@@ -50,12 +50,6 @@ fun SettingsScreen(
     val scanDirectory by viewModel.scanDirectory.collectAsState()
     var directoryInput by remember { mutableStateOf("") }
     
-    val focusRequester = remember { FocusRequester() }
-
-    LaunchedEffect(Unit) {
-        focusRequester.requestFocus()
-    }
-
     // 打开目录选择器
     val directoryLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenDocumentTree()
@@ -87,6 +81,31 @@ fun SettingsScreen(
         directoryInput = scanDirectory
     }
     
+    SettingsScreenContent(
+        scanDirectory = directoryInput,
+        onBack = onBack,
+        onBrowseClick = { directoryLauncher.launch(null) },
+        onClearClick = {
+            directoryInput = ""
+            viewModel.setScanDirectory("")
+        }
+    )
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun SettingsScreenContent(
+    scanDirectory: String,
+    onBack: () -> Unit,
+    onBrowseClick: () -> Unit,
+    onClearClick: () -> Unit
+) {
+    val focusRequester = remember { FocusRequester() }
+
+    LaunchedEffect(Unit) {
+        focusRequester.requestFocus()
+    }
+
     Scaffold(
         topBar = {
             TopAppBar(
@@ -120,14 +139,14 @@ fun SettingsScreen(
             )
             Spacer(modifier = Modifier.height(16.dp))
             OutlinedTextField(
-                value = directoryInput,
+                value = scanDirectory,
                 onValueChange = {}, // 只读
                 readOnly = true,
                 label = { Text("目录路径") },
                 placeholder = { Text("点击右侧图标选择目录 ->") },
                 modifier = Modifier
                     .fillMaxWidth()
-                    .clickable { directoryLauncher.launch(null) },
+                    .clickable { onBrowseClick() },
                 enabled = false, // 禁用直接输入，但外层 clickable 可用（需调整颜色）
                 colors = OutlinedTextFieldDefaults.colors(
                     disabledTextColor = MaterialTheme.colorScheme.onSurface,
@@ -137,7 +156,7 @@ fun SettingsScreen(
                     disabledTrailingIconColor = MaterialTheme.colorScheme.onSurfaceVariant
                 ),
                 trailingIcon = {
-                    IconButton(onClick = { directoryLauncher.launch(null) }) {
+                    IconButton(onClick = onBrowseClick) {
                         Icon(Icons.Default.FolderOpen, contentDescription = "选择目录")
                     }
                 },
@@ -148,16 +167,15 @@ fun SettingsScreen(
             Button(
                 onClick = {
                     // 如果用户想清除设置，可以点击这个按钮清空
-                    if (directoryInput.isEmpty()) {
-                         directoryLauncher.launch(null)
+                    if (scanDirectory.isEmpty()) {
+                         onBrowseClick()
                     } else {
-                         directoryInput = ""
-                         viewModel.setScanDirectory("")
+                         onClearClick()
                     }
                 },
                 modifier = Modifier.fillMaxWidth()
             ) {
-                Text(if (directoryInput.isEmpty()) "选择目录" else "清除并扫描所有")
+                Text(if (scanDirectory.isEmpty()) "选择目录" else "清除并扫描所有")
             }
             Spacer(modifier = Modifier.height(24.dp))
             Text(
@@ -194,3 +212,17 @@ private fun getPathFromUri(uri: Uri): String? {
     }
     return null
 }
+
+@DevicePreviews
+@Composable
+fun SettingsScreenPreview() {
+    MaterialTheme {
+        SettingsScreenContent(
+            scanDirectory = "/storage/emulated/0/Music",
+            onBack = {},
+            onBrowseClick = {},
+            onClearClick = {}
+        )
+    }
+}
+

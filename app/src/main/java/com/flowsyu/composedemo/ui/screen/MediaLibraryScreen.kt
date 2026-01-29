@@ -53,6 +53,12 @@ import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.focusable
 import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.type
+import androidx.compose.ui.tooling.preview.Preview
+import com.flowsyu.composedemo.ui.preview.DevicePreviews
+import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalInspectionMode
+import android.content.res.Configuration
+import androidx.compose.foundation.background
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalPermissionsApi::class)
 @Composable
@@ -63,12 +69,63 @@ fun MediaLibraryScreen(
 ) {
     val state by viewModel.state.collectAsState()
     
+    val permissions = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+        listOf(
+            Manifest.permission.READ_MEDIA_AUDIO,
+            Manifest.permission.READ_MEDIA_IMAGES,
+            Manifest.permission.READ_MEDIA_VIDEO,
+            Manifest.permission.POST_NOTIFICATIONS
+        )
+    } else {
+        listOf(Manifest.permission.READ_EXTERNAL_STORAGE)
+    }
+    
+    val permissionsState = rememberMultiplePermissionsState(permissions)
+    
+    LaunchedEffect(Unit) {
+        if (!permissionsState.allPermissionsGranted) {
+            permissionsState.launchMultiplePermissionRequest()
+        }
+    }
+
+    MediaLibraryScreenContent(
+        mediaFiles = state.mediaFiles,
+        isLoading = state.isLoading,
+        error = state.error,
+        viewType = state.viewType,
+        permissionsGranted = permissionsState.allPermissionsGranted,
+        onOpenSettings = onOpenSettings,
+        onMediaFileClick = onMediaFileClick,
+        onToggleViewType = viewModel::toggleViewType,
+        onRefresh = { viewModel.loadMediaFiles() },
+        onRequestPermission = { permissionsState.launchMultiplePermissionRequest() }
+    )
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun MediaLibraryScreenContent(
+    mediaFiles: List<MediaFile>,
+    isLoading: Boolean,
+    error: String?,
+    viewType: ViewType,
+    permissionsGranted: Boolean,
+    onOpenSettings: () -> Unit,
+    onMediaFileClick: (MediaFile) -> Unit,
+    onToggleViewType: () -> Unit,
+    onRefresh: () -> Unit,
+    onRequestPermission: () -> Unit
+) {
     val focusRequester = remember { FocusRequester() }
     val searchFieldFocusRequester = remember { FocusRequester() }
     val listState = rememberLazyListState()
     val gridState = rememberLazyGridState()
     val itemFocusRequesters = remember { mutableStateMapOf<String, FocusRequester>() }
     var lastSelectedUri by rememberSaveable { mutableStateOf<String?>(null) }
+    
+    val configuration = LocalConfiguration.current
+    val isTv = (configuration.uiMode and Configuration.UI_MODE_TYPE_MASK) == Configuration.UI_MODE_TYPE_TELEVISION
+    val gridMinSize = if (isTv) 150.dp else 120.dp
 
     LaunchedEffect(Unit) {
         focusRequester.requestFocus()
@@ -88,19 +145,16 @@ fun MediaLibraryScreen(
         searchQuery = ""
     }
     
-    val filteredMediaFiles = remember(state.mediaFiles, searchQuery) {
+    val filteredMediaFiles = remember(mediaFiles, searchQuery) {
         if (searchQuery.isBlank()) {
-            state.mediaFiles
+            mediaFiles
         } else {
-            state.mediaFiles.filter { 
+            mediaFiles.filter { 
                 it.name.contains(searchQuery, ignoreCase = true) 
             }
         }
     }
     
-    // ... (permissions logic omitted)
-
-    // Helper to handle click and update playlist
     val handleMediaClick: (MediaFile) -> Unit = { file ->
         lastSelectedUri = file.uri.toString()
         val index = filteredMediaFiles.indexOfFirst { it.uri == file.uri }
@@ -110,36 +164,17 @@ fun MediaLibraryScreen(
         onMediaFileClick(file)
     }
 
-    LaunchedEffect(lastSelectedUri, filteredMediaFiles, state.viewType) {
+    LaunchedEffect(lastSelectedUri, filteredMediaFiles, viewType) {
         val key = lastSelectedUri ?: return@LaunchedEffect
         val index = filteredMediaFiles.indexOfFirst { it.uri.toString() == key }
         if (index >= 0) {
-            if (state.viewType == ViewType.LIST) {
+            if (viewType == ViewType.LIST) {
                 listState.scrollToItem(index)
             } else {
                 gridState.scrollToItem(index)
             }
             withFrameNanos { }
             itemFocusRequesters[key]?.requestFocus()
-        }
-    }
-
-    val permissions = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-        listOf(
-            Manifest.permission.READ_MEDIA_AUDIO,
-            Manifest.permission.READ_MEDIA_IMAGES,
-            Manifest.permission.READ_MEDIA_VIDEO,
-            Manifest.permission.POST_NOTIFICATIONS
-        )
-    } else {
-        listOf(Manifest.permission.READ_EXTERNAL_STORAGE)
-    }
-    
-    val permissionsState = rememberMultiplePermissionsState(permissions)
-    
-    LaunchedEffect(Unit) {
-        if (!permissionsState.allPermissionsGranted) {
-            permissionsState.launchMultiplePermissionRequest()
         }
     }
     
@@ -193,14 +228,14 @@ fun MediaLibraryScreen(
                         ) {
                             Icon(Icons.Default.Search, "搜索")
                         }
-                        IconButton(onClick = { viewModel.toggleViewType() }) {
+                        IconButton(onClick = onToggleViewType) {
                             Icon(
-                                if (state.viewType == ViewType.LIST) Icons.Default.GridView 
+                                if (viewType == ViewType.LIST) Icons.Default.GridView 
                                 else Icons.Default.List,
                                 contentDescription = "切换视图"
                             )
                         }
-                        IconButton(onClick = { viewModel.loadMediaFiles() }) {
+                        IconButton(onClick = onRefresh) {
                             Icon(Icons.Default.Refresh, contentDescription = "刷新")
                         }
                         IconButton(onClick = onOpenSettings) {
@@ -217,22 +252,20 @@ fun MediaLibraryScreen(
                 .padding(paddingValues)
         ) {
             when {
-                !permissionsState.allPermissionsGranted -> {
+                !permissionsGranted -> {
                     PermissionRequestContent(
-                        onRequestPermission = {
-                            permissionsState.launchMultiplePermissionRequest()
-                        }
+                        onRequestPermission = onRequestPermission
                     )
                 }
-                state.isLoading -> {
+                isLoading -> {
                     CircularProgressIndicator(
                         modifier = Modifier.align(Alignment.Center)
                     )
                 }
-                state.error != null -> {
+                error != null -> {
                     ErrorContent(
-                        error = state.error!!,
-                        onRetry = { viewModel.loadMediaFiles() }
+                        error = error,
+                        onRetry = onRefresh
                     )
                 }
                 filteredMediaFiles.isEmpty() -> {
@@ -245,7 +278,7 @@ fun MediaLibraryScreen(
                     }
                 }
                 else -> {
-                    if (state.viewType == ViewType.LIST) {
+                    if (viewType == ViewType.LIST) {
                         MediaListView(
                             mediaFiles = filteredMediaFiles,
                             listState = listState,
@@ -258,6 +291,7 @@ fun MediaLibraryScreen(
                         MediaGridView(
                             mediaFiles = filteredMediaFiles,
                             gridState = gridState,
+                            minSize = gridMinSize,
                             focusRequesterForItem = { file ->
                                 itemFocusRequesters.getOrPut(file.uri.toString()) { FocusRequester() }
                             },
@@ -267,6 +301,36 @@ fun MediaLibraryScreen(
                 }
             }
         }
+    }
+}
+
+@DevicePreviews
+@Composable
+fun MediaLibraryScreenPreview() {
+    val sampleFiles = (1..10).map {
+        MediaFile(
+            uri = android.net.Uri.parse("content://media/external/images/media/$it"),
+            name = "Sample Media $it",
+            path = "/path/to/media/$it",
+            size = 1024 * 1024L * it,
+            duration = 60000L * it,
+            type = if (it % 2 == 0) MediaType.VIDEO else MediaType.AUDIO
+        )
+    }
+
+    MaterialTheme {
+        MediaLibraryScreenContent(
+            mediaFiles = sampleFiles,
+            isLoading = false,
+            error = null,
+            viewType = ViewType.GRID,
+            permissionsGranted = true,
+            onOpenSettings = {},
+            onMediaFileClick = {},
+            onToggleViewType = {},
+            onRefresh = {},
+            onRequestPermission = {}
+        )
     }
 }
 
@@ -397,6 +461,7 @@ fun MediaListItem(
     val interactionSource = remember { MutableInteractionSource() }
     val isFocused by interactionSource.collectIsFocusedAsState()
     val scale by animateFloatAsState(if (isFocused) 1.02f else 1f)
+    val isPreview = LocalInspectionMode.current
 
     Card(
         modifier = Modifier
@@ -437,28 +502,52 @@ fun MediaListItem(
         ) {
             when (mediaFile.type) {
                 MediaType.VIDEO -> {
-                    AsyncImage(
-                        model = mediaFile.uri,
-                        contentDescription = null,
-                        modifier = Modifier
-                            .size(40.dp)
-                            .clip(RoundedCornerShape(4.dp)),
-                        contentScale = ContentScale.Crop,
-                        error = rememberVectorPainter(Icons.Default.VideoLibrary),
-                        placeholder = rememberVectorPainter(Icons.Default.VideoLibrary)
-                    )
+                    if (isPreview) {
+                        Box(
+                            modifier = Modifier
+                                .size(40.dp)
+                                .clip(RoundedCornerShape(4.dp))
+                                .background(Color.Gray),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(Icons.Default.VideoLibrary, null, tint = Color.White)
+                        }
+                    } else {
+                        AsyncImage(
+                            model = mediaFile.uri,
+                            contentDescription = null,
+                            modifier = Modifier
+                                .size(40.dp)
+                                .clip(RoundedCornerShape(4.dp)),
+                            contentScale = ContentScale.Crop,
+                            error = rememberVectorPainter(Icons.Default.VideoLibrary),
+                            placeholder = rememberVectorPainter(Icons.Default.VideoLibrary)
+                        )
+                    }
                 }
                 MediaType.IMAGE -> {
-                    AsyncImage(
-                        model = mediaFile.uri,
-                        contentDescription = null,
-                        modifier = Modifier
-                            .size(40.dp)
-                            .clip(RoundedCornerShape(4.dp)),
-                        contentScale = ContentScale.Crop,
-                        error = rememberVectorPainter(Icons.Default.Image),
-                        placeholder = rememberVectorPainter(Icons.Default.Image)
-                    )
+                    if (isPreview) {
+                        Box(
+                            modifier = Modifier
+                                .size(40.dp)
+                                .clip(RoundedCornerShape(4.dp))
+                                .background(Color.Gray),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(Icons.Default.Image, null, tint = Color.White)
+                        }
+                    } else {
+                        AsyncImage(
+                            model = mediaFile.uri,
+                            contentDescription = null,
+                            modifier = Modifier
+                                .size(40.dp)
+                                .clip(RoundedCornerShape(4.dp)),
+                            contentScale = ContentScale.Crop,
+                            error = rememberVectorPainter(Icons.Default.Image),
+                            placeholder = rememberVectorPainter(Icons.Default.Image)
+                        )
+                    }
                 }
                 MediaType.AUDIO -> {
                     Icon(
@@ -521,11 +610,12 @@ fun MediaListItem(
 fun MediaGridView(
     mediaFiles: List<MediaFile>,
     gridState: androidx.compose.foundation.lazy.grid.LazyGridState,
+    minSize: androidx.compose.ui.unit.Dp,
     focusRequesterForItem: (MediaFile) -> FocusRequester,
     onMediaFileClick: (MediaFile) -> Unit
 ) {
     LazyVerticalGrid(
-        columns = GridCells.Adaptive(minSize = 150.dp),
+        columns = GridCells.Adaptive(minSize = minSize),
         modifier = Modifier.fillMaxSize(),
         state = gridState,
         contentPadding = PaddingValues(8.dp)
@@ -549,6 +639,7 @@ fun MediaGridItem(
     val interactionSource = remember { MutableInteractionSource() }
     val isFocused by interactionSource.collectIsFocusedAsState()
     val scale by animateFloatAsState(if (isFocused) 1.02f else 1f)
+    val isPreview = LocalInspectionMode.current
 
     Card(
         modifier = Modifier
@@ -590,28 +681,52 @@ fun MediaGridItem(
         ) {
             when (mediaFile.type) {
                 MediaType.VIDEO -> {
-                    AsyncImage(
-                        model = mediaFile.uri,
-                        contentDescription = null,
-                        modifier = Modifier
-                            .size(48.dp)
-                            .clip(RoundedCornerShape(8.dp)),
-                        contentScale = ContentScale.Crop,
-                        error = rememberVectorPainter(Icons.Default.VideoLibrary),
-                        placeholder = rememberVectorPainter(Icons.Default.VideoLibrary)
-                    )
+                    if (isPreview) {
+                        Box(
+                            modifier = Modifier
+                                .size(48.dp)
+                                .clip(RoundedCornerShape(8.dp))
+                                .background(Color.Gray),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(Icons.Default.VideoLibrary, null, tint = Color.White)
+                        }
+                    } else {
+                         AsyncImage(
+                            model = mediaFile.uri,
+                            contentDescription = null,
+                            modifier = Modifier
+                                .size(48.dp)
+                                .clip(RoundedCornerShape(8.dp)),
+                            contentScale = ContentScale.Crop,
+                            error = rememberVectorPainter(Icons.Default.VideoLibrary),
+                            placeholder = rememberVectorPainter(Icons.Default.VideoLibrary)
+                        )
+                    }
                 }
                 MediaType.IMAGE -> {
-                    AsyncImage(
-                        model = mediaFile.uri,
-                        contentDescription = null,
-                        modifier = Modifier
-                            .size(48.dp)
-                            .clip(RoundedCornerShape(8.dp)),
-                        contentScale = ContentScale.Crop,
-                        error = rememberVectorPainter(Icons.Default.Image),
-                        placeholder = rememberVectorPainter(Icons.Default.Image)
-                    )
+                    if (isPreview) {
+                         Box(
+                            modifier = Modifier
+                                .size(48.dp)
+                                .clip(RoundedCornerShape(8.dp))
+                                .background(Color.Gray),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(Icons.Default.Image, null, tint = Color.White)
+                        }
+                    } else {
+                        AsyncImage(
+                            model = mediaFile.uri,
+                            contentDescription = null,
+                            modifier = Modifier
+                                .size(48.dp)
+                                .clip(RoundedCornerShape(8.dp)),
+                            contentScale = ContentScale.Crop,
+                            error = rememberVectorPainter(Icons.Default.Image),
+                            placeholder = rememberVectorPainter(Icons.Default.Image)
+                        )
+                    }
                 }
                 MediaType.AUDIO -> {
                     Icon(

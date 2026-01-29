@@ -2,55 +2,55 @@ package com.flowsyu.composedemo.ui.screen
 
 import android.app.Activity
 import android.content.pm.ActivityInfo
+import android.content.res.Configuration
 import android.media.MediaPlayer
 import android.view.SurfaceHolder
 import android.view.SurfaceView
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.focusable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.input.key.*
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
-import androidx.compose.foundation.focusable
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.key.*
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalConfiguration
-import com.flowsyu.composedemo.model.MediaManager
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.itemsIndexed
-import androidx.compose.material3.ModalBottomSheet
-import androidx.compose.material3.rememberModalBottomSheetState
-import android.content.res.Configuration
-import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.slideInHorizontally
-import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
-import com.flowsyu.composedemo.model.MediaFile
-import com.flowsyu.composedemo.data.SettingsRepository
-import com.flowsyu.composedemo.util.formatDuration
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.isActive
-import kotlinx.coroutines.flow.collectLatest
-import kotlinx.coroutines.launch
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
-import androidx.compose.animation.core.tween
 import coil.compose.AsyncImage
-import androidx.compose.ui.layout.ContentScale
+import com.flowsyu.composedemo.data.SettingsRepository
+import com.flowsyu.composedemo.model.MediaFile
+import com.flowsyu.composedemo.model.MediaManager
+import com.flowsyu.composedemo.model.MediaType
+import com.flowsyu.composedemo.ui.preview.DevicePreviews
+import com.flowsyu.composedemo.util.formatDuration
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun VideoPlayerScreen(
     mediaFile: MediaFile,
@@ -58,16 +58,8 @@ fun VideoPlayerScreen(
 ) {
     val context = LocalContext.current
     val activity = context as? Activity
-    val configuration = LocalConfiguration.current
     val scope = rememberCoroutineScope()
     val settingsRepository = remember { SettingsRepository(context) }
-    
-    // Focus requester for the main container to capture key events from remote
-    val focusRequester = remember { FocusRequester() }
-
-    LaunchedEffect(Unit) {
-        focusRequester.requestFocus()
-    }
     
     var mediaPlayer by remember { mutableStateOf<MediaPlayer?>(null) }
     var isPlaying by remember { mutableStateOf(false) }
@@ -76,15 +68,9 @@ fun VideoPlayerScreen(
     var duration by remember { mutableStateOf(mediaFile.duration) }
     var showControls by remember { mutableStateOf(true) }
     var playbackSpeed by remember { mutableStateOf(1.0f) }
-    var showSpeedMenu by remember { mutableStateOf(false) }
     var videoAspectRatio by remember { mutableStateOf(16f / 9f) }
     var showPoster by remember(currentMediaFile) { mutableStateOf(true) }
-
-    // Playlist
-    var showPlaylist by remember { mutableStateOf(false) }
-    val sheetState = rememberModalBottomSheetState()
-    val isLandscape = configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
-
+    
     var surfaceHolder by remember { mutableStateOf<SurfaceHolder?>(null) }
 
     // Init speed from data store
@@ -145,6 +131,7 @@ fun VideoPlayerScreen(
             }
         }
     }
+
     LaunchedEffect(showControls, isPlaying) {
         if (showControls && isPlaying) {
             delay(3000)
@@ -152,7 +139,7 @@ fun VideoPlayerScreen(
         }
     }
 
-    // 更新播放进度
+    // Update progress
     LaunchedEffect(isPlaying) {
         while (isActive && isPlaying) {
             mediaPlayer?.let {
@@ -184,6 +171,89 @@ fun VideoPlayerScreen(
         }
     }
 
+    VideoPlayerScreenContent(
+        mediaFile = currentMediaFile,
+        isPlaying = isPlaying,
+        currentPosition = currentPosition,
+        duration = duration,
+        showControls = showControls,
+        showPoster = showPoster,
+        videoAspectRatio = videoAspectRatio,
+        playbackSpeed = playbackSpeed,
+        playlist = MediaManager.mediaList,
+        onBack = onBack,
+        onSurfaceCreated = { surfaceHolder = it },
+        onSurfaceDestroyed = { 
+            surfaceHolder = null
+            mediaPlayer?.release()
+            mediaPlayer = null
+        },
+        onToggleControls = { showControls = !showControls },
+        onShowControls = { showControls = true },
+        onPlayPause = {
+             mediaPlayer?.let {
+                if (isPlaying) it.pause() else it.start()
+                isPlaying = !isPlaying
+                showControls = true
+            }
+        },
+        onSeek = { pos ->
+            mediaPlayer?.let {
+                 it.seekTo(pos.toInt())
+                 currentPosition = pos
+            }
+        },
+        onPlaybackSpeedChange = { speed ->
+            scope.launch {
+                settingsRepository.setVideoPlaybackSpeed(speed)
+            }
+        },
+        onFileSelected = { file ->
+             mediaPlayer?.release()
+             mediaPlayer = null
+             currentMediaFile = file
+        }
+    )
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun VideoPlayerScreenContent(
+    mediaFile: MediaFile,
+    isPlaying: Boolean,
+    currentPosition: Long,
+    duration: Long,
+    showControls: Boolean,
+    showPoster: Boolean,
+    videoAspectRatio: Float,
+    playbackSpeed: Float,
+    playlist: List<MediaFile>,
+    onBack: () -> Unit,
+    onSurfaceCreated: (SurfaceHolder) -> Unit,
+    onSurfaceDestroyed: () -> Unit,
+    onToggleControls: () -> Unit,
+    onShowControls: () -> Unit,
+    onPlayPause: () -> Unit,
+    onSeek: (Long) -> Unit,
+    onPlaybackSpeedChange: (Float) -> Unit,
+    onFileSelected: (MediaFile) -> Unit
+) {
+    val focusRequester = remember { FocusRequester() }
+    val configuration = LocalConfiguration.current
+    val isLandscape = configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
+    
+    var showPlaylist by remember { mutableStateOf(false) }
+    var showSpeedMenu by remember { mutableStateOf(false) }
+    val sheetState = rememberModalBottomSheetState()
+    
+    // Local slider state for smooth dragging
+    var sliderPosition by remember(currentPosition) { mutableStateOf(currentPosition.toFloat()) }
+    var isDragging by remember { mutableStateOf(false) }
+
+    LaunchedEffect(Unit) {
+        focusRequester.requestFocus()
+    }
+
     Box(
         modifier = Modifier
             .fillMaxSize()
@@ -192,7 +262,7 @@ fun VideoPlayerScreen(
                 interactionSource = remember { MutableInteractionSource() },
                 indication = null
             ) {
-                showControls = !showControls
+                onToggleControls()
             }
             .focusRequester(focusRequester)
             .focusable()
@@ -200,27 +270,19 @@ fun VideoPlayerScreen(
                 if (event.type == KeyEventType.KeyUp) {
                     when (event.key) {
                         Key.DirectionCenter, Key.Enter -> {
-                            // If controls are hidden, show them.
-                            // If focused on the main container (not buttons), toggle controls/play.
-                            showControls = !showControls
+                            onToggleControls()
                             true
                         }
                         Key.DirectionUp, Key.DirectionDown, Key.DirectionLeft, Key.DirectionRight -> {
                             if (!showControls) {
-                                showControls = true
-                                true // consume event to prevent focus jump before controls appear? 
-                                     // Actually better to let it pass if we want focus system to work immediately
-                                     // but here we just want to wake up the UI
+                                onShowControls()
+                                true
                             } else {
                                 false
                             }
                         }
                         Key.MediaPlayPause, Key.MediaPlay, Key.MediaPause -> {
-                            mediaPlayer?.let {
-                                if (isPlaying) it.pause() else it.start()
-                                isPlaying = !isPlaying
-                                showControls = true
-                            }
+                            onPlayPause()
                             true
                         }
                         else -> false
@@ -230,13 +292,12 @@ fun VideoPlayerScreen(
                 }
             }
     ) {
-        // SurfaceView for video
         AndroidView(
             factory = { ctx ->
                 SurfaceView(ctx).apply {
                     holder.addCallback(object : SurfaceHolder.Callback {
                         override fun surfaceCreated(holder: SurfaceHolder) {
-                            surfaceHolder = holder
+                            onSurfaceCreated(holder)
                         }
 
                         override fun surfaceChanged(
@@ -247,9 +308,7 @@ fun VideoPlayerScreen(
                         ) {}
 
                         override fun surfaceDestroyed(holder: SurfaceHolder) {
-                            surfaceHolder = null
-                            mediaPlayer?.release()
-                            mediaPlayer = null
+                            onSurfaceDestroyed()
                         }
                     })
                 }
@@ -259,8 +318,6 @@ fun VideoPlayerScreen(
                 .aspectRatio(videoAspectRatio)
         )
         
-        // Poster Frame (Video Thumbnail Placeholder)
-        // Shows initially to prevent black flash, fades out when video starts rendering
         AnimatedVisibility(
             visible = showPoster,
             enter = fadeIn(),
@@ -268,14 +325,13 @@ fun VideoPlayerScreen(
             modifier = Modifier.align(Alignment.Center).aspectRatio(videoAspectRatio)
         ) {
              AsyncImage(
-                model = currentMediaFile.uri,
+                model = mediaFile.uri,
                 contentDescription = null,
                 modifier = Modifier.fillMaxSize(),
                 contentScale = ContentScale.Crop
              )
         }
 
-        // 控制栏
         AnimatedVisibility(
             visible = showControls,
             enter = fadeIn(),
@@ -284,7 +340,6 @@ fun VideoPlayerScreen(
             Column(
                 modifier = Modifier.fillMaxSize()
             ) {
-                // 顶部栏
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -300,7 +355,7 @@ fun VideoPlayerScreen(
                         )
                     }
                     Text(
-                        text = currentMediaFile.name,
+                        text = mediaFile.name,
                         color = Color.White,
                         style = MaterialTheme.typography.titleMedium,
                         modifier = Modifier.weight(1f)
@@ -309,31 +364,31 @@ fun VideoPlayerScreen(
 
                 Spacer(modifier = Modifier.weight(1f))
 
-                // 底部控制栏
                 Column(
                     modifier = Modifier
                         .fillMaxWidth()
                         .background(Color.Black.copy(alpha = 0.5f))
                         .padding(16.dp)
                 ) {
-                    // 进度条
                     Row(
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Text(
-                            text = formatDuration(currentPosition),
+                         Text(
+                            text = formatDuration(if (isDragging) sliderPosition.toLong() else currentPosition),
                             color = Color.White,
                             style = MaterialTheme.typography.bodySmall
                         )
                         Slider(
-                            value = currentPosition.toFloat(),
-                            onValueChange = { value ->
-                                currentPosition = value.toLong()
+                            value = if (isDragging) sliderPosition else currentPosition.toFloat(),
+                            onValueChange = { 
+                                isDragging = true
+                                sliderPosition = it
                             },
                             onValueChangeFinished = {
-                                mediaPlayer?.seekTo(currentPosition.toInt())
+                                onSeek(sliderPosition.toLong())
+                                isDragging = false
                             },
-                            valueRange = 0f..duration.toFloat(),
+                            valueRange = 0f..if (duration > 0) duration.toFloat() else 1f,
                             modifier = Modifier
                                 .weight(1f)
                                 .padding(horizontal = 8.dp)
@@ -345,19 +400,14 @@ fun VideoPlayerScreen(
                         )
                     }
 
-                    // 播放控制按钮
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceEvenly,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        // 快退
                         IconButton(onClick = {
-                            mediaPlayer?.let {
-                                val newPos = (currentPosition - 10000).coerceAtLeast(0)
-                                it.seekTo(newPos.toInt())
-                                currentPosition = newPos
-                            }
+                            val newPos = (currentPosition - 10000).coerceAtLeast(0)
+                            onSeek(newPos)
                         }) {
                             Icon(
                                 Icons.Default.Replay10,
@@ -367,18 +417,7 @@ fun VideoPlayerScreen(
                             )
                         }
 
-                        // 播放/暂停
-                        IconButton(onClick = {
-                            mediaPlayer?.let {
-                                if (isPlaying) {
-                                    it.pause()
-                                    isPlaying = false
-                                } else {
-                                    it.start()
-                                    isPlaying = true
-                                }
-                            }
-                        }) {
+                        IconButton(onClick = onPlayPause) {
                             Icon(
                                 if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
                                 contentDescription = if (isPlaying) "暂停" else "播放",
@@ -387,13 +426,9 @@ fun VideoPlayerScreen(
                             )
                         }
 
-                        // 快进
                         IconButton(onClick = {
-                            mediaPlayer?.let {
-                                val newPos = (currentPosition + 10000).coerceAtMost(duration)
-                                it.seekTo(newPos.toInt())
-                                currentPosition = newPos
-                            }
+                            val newPos = (currentPosition + 10000).coerceAtMost(duration)
+                            onSeek(newPos)
                         }) {
                             Icon(
                                 Icons.Default.Forward10,
@@ -403,7 +438,6 @@ fun VideoPlayerScreen(
                             )
                         }
 
-                        // 列表
                         IconButton(onClick = { showPlaylist = !showPlaylist }) {
                             Icon(
                                 Icons.Default.QueueMusic,
@@ -413,7 +447,6 @@ fun VideoPlayerScreen(
                             )
                         }
 
-                        // 倍速
                         Box {
                             IconButton(onClick = { showSpeedMenu = !showSpeedMenu }) {
                                 Icon(
@@ -431,10 +464,7 @@ fun VideoPlayerScreen(
                                     DropdownMenuItem(
                                         text = { Text("${speed}x") },
                                         onClick = {
-                                            // playbackSpeed is updated via the flow collection
-                                            scope.launch {
-                                                settingsRepository.setVideoPlaybackSpeed(speed)
-                                            }
+                                            onPlaybackSpeedChange(speed)
                                             showSpeedMenu = false
                                         },
                                         trailingIcon = if (speed == playbackSpeed) {
@@ -455,15 +485,12 @@ fun VideoPlayerScreen(
             }
         }
         
-        // Playlist UI
         if (showPlaylist) {
             if (isLandscape) {
-                // Landscape: Side Panel
                 Box(
                     modifier = Modifier.fillMaxSize(),
                     contentAlignment = Alignment.CenterEnd
                 ) {
-                    // Dim background for outside click
                      Box(
                         modifier = Modifier
                             .fillMaxSize()
@@ -483,15 +510,10 @@ fun VideoPlayerScreen(
                             tonalElevation = 8.dp
                         ) {
                              VideoPlaylistContent(
-                                currentFile = currentMediaFile,
+                                currentFile = mediaFile,
+                                playlist = playlist,
                                 onFileSelected = { file ->
-                                    // Switch video
-                                    mediaPlayer?.release()
-                                    mediaPlayer = null // This triggers update in AndroidView
-                                    currentMediaFile = file
-                                    // Keep playlist open or close? Often nice close on selection in mobile
-                                    // But maybe keep open for quick switching? Let's keep open for now or toggle?
-                                    // Let's close it to let user see video.
+                                    onFileSelected(file)
                                     showPlaylist = false 
                                 }
                             )
@@ -499,17 +521,15 @@ fun VideoPlayerScreen(
                     }
                 }
             } else {
-                // Portrait: Bottom Sheet
                 ModalBottomSheet(
                     onDismissRequest = { showPlaylist = false },
                     sheetState = sheetState
                 ) {
                       VideoPlaylistContent(
-                        currentFile = currentMediaFile,
+                        currentFile = mediaFile,
+                        playlist = playlist,
                         onFileSelected = { file ->
-                            mediaPlayer?.release()
-                            mediaPlayer = null
-                            currentMediaFile = file
+                            onFileSelected(file)
                             showPlaylist = false
                         }
                     )
@@ -522,29 +542,26 @@ fun VideoPlayerScreen(
 @Composable
 fun VideoPlaylistContent(
     currentFile: MediaFile,
+    playlist: List<MediaFile>,
     onFileSelected: (MediaFile) -> Unit
 ) {
     Column(
         modifier = Modifier.fillMaxSize()
     ) {
         Text(
-            text = "播放列表 (${MediaManager.mediaList.size})",
+            text = "播放列表 (${playlist.size})",
             style = MaterialTheme.typography.titleMedium,
             modifier = Modifier.padding(16.dp)
         )
         LazyColumn {
-            itemsIndexed(MediaManager.mediaList) { index, file ->
-                // Basic filter for video type logic could go here if Mixed list
-                // But assuming MediaManager has mixed list, maybe we should filter or just show all?
-                // Assuming currently user wants to see what's in the current context playlist.
-                
+            itemsIndexed(playlist) { index, file ->
                 val isCurrent = file.uri == currentFile.uri
                 ListItem(
                     headlineContent = { 
                         Text(
                             file.name, 
                             maxLines = 1, 
-                            overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                            overflow = TextOverflow.Ellipsis,
                             color = if (isCurrent) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
                         ) 
                     },
@@ -560,7 +577,7 @@ fun VideoPlaylistContent(
                                 text = "${index + 1}",
                                 style = MaterialTheme.typography.bodyMedium,
                                 modifier = Modifier.width(24.dp),
-                                textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                                textAlign = TextAlign.Center
                             )
                         }
                     },
@@ -582,5 +599,42 @@ private fun setPlaybackSpeed(mediaPlayer: MediaPlayer, speed: Float) {
         }
     } catch (e: Exception) {
         e.printStackTrace()
+    }
+}
+
+@DevicePreviews
+@Composable
+fun VideoPlayerScreenPreview() {
+    val sampleFile = MediaFile(
+        uri = android.net.Uri.EMPTY,
+        name = "Big Buck Bunny.mp4",
+        path = "",
+        size = 1000L,
+        duration = 600000L,
+        type = MediaType.VIDEO
+    )
+    val playlist = listOf(sampleFile, sampleFile.copy(name = "Another Video.mp4"))
+    
+    MaterialTheme {
+        VideoPlayerScreenContent(
+            mediaFile = sampleFile,
+            isPlaying = true,
+            currentPosition = 120000L,
+            duration = 600000L,
+            showControls = true,
+            showPoster = false,
+            videoAspectRatio = 16f/9f,
+            playbackSpeed = 1.0f,
+            playlist = playlist,
+            onBack = {},
+            onSurfaceCreated = {},
+            onSurfaceDestroyed = {},
+            onToggleControls = {},
+            onShowControls = {},
+            onPlayPause = {},
+            onSeek = {},
+            onPlaybackSpeedChange = {},
+            onFileSelected = {}
+        )
     }
 }
